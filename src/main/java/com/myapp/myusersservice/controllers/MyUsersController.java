@@ -67,11 +67,4 @@ public class MyUsersController {
         String response = baseService.updateOrderStatus(uuid, status);
         return new ResponseEntity<>(response, HttpStatus.OK);
     }
-
-    @DeleteMapping("/deleteAddress/{uuid}")
-    public ResponseEntity<String> deleteAddress(@PathVariable String uuid) {
-        String response = baseService.deleteAddress(uuid);
-        return new ResponseEntity<>(response, HttpStatus.NO_CONTENT);
-    }
-
 }

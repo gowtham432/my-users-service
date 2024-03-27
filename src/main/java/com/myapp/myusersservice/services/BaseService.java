@@ -126,19 +126,6 @@ public class BaseService {
         return response;
     }
 
-    public String deleteAddress(String uuid) {
-        String response;
-        try {
-            addressRepository.deleteById(UUID.fromString(uuid));
-            log.info("Address deleted");
-            response = "Deleted";
-        } catch (Exception e) {
-            throw new RuntimeException("Error while deleting address", e.getCause());
-        }
-        return response;
-    }
-
-
     public UserProfileModel setUserProfileDetails(UserProfileEntity data) {
         return new UserProfileModel(
                 data.getUserId().toString(),
