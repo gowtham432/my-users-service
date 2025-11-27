@@ -1,6 +1,6 @@
 plugins {
     java
-    id("org.springframework.boot") version "2.6.6"   // vulnerable: Spring4Shell
+    id("org.springframework.boot") version "3.2.2"
     id("io.spring.dependency-management") version "1.1.4"
 }
 
@@ -23,14 +23,16 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-web")
 
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.9.8") // critically vulnerable
-    runtimeOnly("mysql:mysql-connector-java:5.1.44") // multiple CVEs
+    // ❗ Intentionally vulnerable dependency (RCE)
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.9.8")
+
+    // ❗ Very old & vulnerable MySQL Connector (multiple CVEs)
+    runtimeOnly("mysql:mysql-connector-java:5.1.44")
 
     implementation("org.jetbrains:annotations:24.0.0")
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")
 
-    runtimeOnly("com.mysql:mysql-connector-j")
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.2.0")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
