@@ -71,6 +71,66 @@ jobs:
             find . -name "dependency-check-report.*" -type f
           fi
 
+      - name: Create clean OWASP summary
+        if: always()
+        run: |
+          if [ -f build/reports/dependency-check-report.json ]; then
+            echo "Creating clean OWASP vulnerability summary..."
+            
+            # Create text summary
+            cat > owasp-vulnerability-summary.txt << 'EOF'
+          ========================================
+          OWASP DEPENDENCY-CHECK REPORT
+          ========================================
+          Scan Date: $(date)
+          Project: my-users-service
+          
+          EOF
+            
+            echo "" >> owasp-vulnerability-summary.txt
+            echo "CRITICAL VULNERABILITIES:" >> owasp-vulnerability-summary.txt
+            echo "=========================" >> owasp-vulnerability-summary.txt
+            cat build/reports/dependency-check-report.json | jq -r '.dependencies[]? | select(.vulnerabilities != null) | .fileName as $file | .vulnerabilities[] | select(.severity == "CRITICAL") | "• \(.name) in \($file)\n  CVSS: \(.cvssv3.baseScore // .cvssv2.score // "N/A")\n  Description: \(.description)\n"' >> owasp-vulnerability-summary.txt || echo "None found" >> owasp-vulnerability-summary.txt
+            
+            echo "" >> owasp-vulnerability-summary.txt
+            echo "HIGH VULNERABILITIES:" >> owasp-vulnerability-summary.txt
+            echo "=====================" >> owasp-vulnerability-summary.txt
+            cat build/reports/dependency-check-report.json | jq -r '.dependencies[]? | select(.vulnerabilities != null) | .fileName as $file | .vulnerabilities[] | select(.severity == "HIGH") | "• \(.name) in \($file)\n  CVSS: \(.cvssv3.baseScore // .cvssv2.score // "N/A")\n  Description: \(.description)\n"' >> owasp-vulnerability-summary.txt || echo "None found" >> owasp-vulnerability-summary.txt
+            
+            echo "" >> owasp-vulnerability-summary.txt
+            echo "MEDIUM VULNERABILITIES:" >> owasp-vulnerability-summary.txt
+            echo "=======================" >> owasp-vulnerability-summary.txt
+            cat build/reports/dependency-check-report.json | jq -r '.dependencies[]? | select(.vulnerabilities != null) | .fileName as $file | .vulnerabilities[] | select(.severity == "MEDIUM") | "• \(.name) in \($file)"' >> owasp-vulnerability-summary.txt || echo "None found" >> owasp-vulnerability-summary.txt
+            
+            echo "" >> owasp-vulnerability-summary.txt
+            echo "========================================" >> owasp-vulnerability-summary.txt
+            echo "SUMMARY:" >> owasp-vulnerability-summary.txt
+            echo "========================================" >> owasp-vulnerability-summary.txt
+            cat build/reports/dependency-check-report.json | jq -r '.dependencies[]? | select(.vulnerabilities != null) | .vulnerabilities[] | .severity' | sort | uniq -c >> owasp-vulnerability-summary.txt
+            
+            # Create CSV
+            echo "Severity,CVE,Package,CVSS Score,Description" > owasp-vulnerabilities.csv
+            cat build/reports/dependency-check-report.json | jq -r '.dependencies[]? | select(.vulnerabilities != null) | .fileName as $file | .vulnerabilities[] | [.severity, .name, $file, (.cvssv3.baseScore // .cvssv2.score // "N/A"), (.description | gsub(","; ";") | .[:100])] | @csv' >> owasp-vulnerabilities.csv
+            
+            cat owasp-vulnerability-summary.txt
+          fi
+
+      - name: Upload OWASP summary report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: owasp-vulnerability-summary
+          path: owasp-vulnerability-summary.txt
+          if-no-files-found: warn
+
+      - name: Upload OWASP CSV report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: owasp-vulnerabilities-csv
+          path: owasp-vulnerabilities.csv
+          if-no-files-found: warn
+
       - name: Upload HTML Report (Human Readable)
         if: always()
         uses: actions/upload-artifact@v4
@@ -132,21 +192,80 @@ jobs:
           echo "=== Grype Vulnerability Scan ==="
           grype dir:build/libs -o table
           echo ""
-          echo "=== Saving JSON report ==="
-          grype dir:build/libs -o json > grype-results.json
+          echo "=== Saving full JSON report ==="
+          grype dir:build/libs -o json > grype-results-full.json
 
-      - name: Display Grype summary
+      - name: Create clean vulnerability summary
         if: always()
         run: |
-          echo "=== Grype Findings Summary ==="
-          cat grype-results.json | jq -r '.matches[]? | "\(.vulnerability.severity) | \(.vulnerability.id) | \(.artifact.name)@\(.artifact.version)"' | sort -r | head -20
+          echo "=== Creating Clean Vulnerability Report ==="
+          
+          # Create summary report with only vulnerabilities
+          cat > grype-vulnerability-summary.txt << 'EOF'
+          ========================================
+          GRYPE VULNERABILITY SCAN REPORT
+          ========================================
+          Scan Date: $(date)
+          Project: my-users-service
+          
+          EOF
+          
+          echo "" >> grype-vulnerability-summary.txt
+          echo "CRITICAL VULNERABILITIES:" >> grype-vulnerability-summary.txt
+          echo "=========================" >> grype-vulnerability-summary.txt
+          cat grype-results-full.json | jq -r '.matches[]? | select(.vulnerability.severity == "Critical") | "• \(.vulnerability.id) - \(.artifact.name)@\(.artifact.version)\n  Description: \(.vulnerability.description // "N/A")\n  Fixed in: \(.vulnerability.fix.versions[0] // "No fix available")\n"' >> grype-vulnerability-summary.txt || echo "None found" >> grype-vulnerability-summary.txt
+          
+          echo "" >> grype-vulnerability-summary.txt
+          echo "HIGH VULNERABILITIES:" >> grype-vulnerability-summary.txt
+          echo "=====================" >> grype-vulnerability-summary.txt
+          cat grype-results-full.json | jq -r '.matches[]? | select(.vulnerability.severity == "High") | "• \(.vulnerability.id) - \(.artifact.name)@\(.artifact.version)\n  Description: \(.vulnerability.description // "N/A")\n  Fixed in: \(.vulnerability.fix.versions[0] // "No fix available")\n"' >> grype-vulnerability-summary.txt || echo "None found" >> grype-vulnerability-summary.txt
+          
+          echo "" >> grype-vulnerability-summary.txt
+          echo "MEDIUM VULNERABILITIES:" >> grype-vulnerability-summary.txt
+          echo "=======================" >> grype-vulnerability-summary.txt
+          cat grype-results-full.json | jq -r '.matches[]? | select(.vulnerability.severity == "Medium") | "• \(.vulnerability.id) - \(.artifact.name)@\(.artifact.version)"' >> grype-vulnerability-summary.txt || echo "None found" >> grype-vulnerability-summary.txt
+          
+          echo "" >> grype-vulnerability-summary.txt
+          echo "LOW VULNERABILITIES:" >> grype-vulnerability-summary.txt
+          echo "====================" >> grype-vulnerability-summary.txt
+          cat grype-results-full.json | jq -r '.matches[]? | select(.vulnerability.severity == "Low") | "• \(.vulnerability.id) - \(.artifact.name)@\(.artifact.version)"' >> grype-vulnerability-summary.txt || echo "None found" >> grype-vulnerability-summary.txt
+          
+          echo "" >> grype-vulnerability-summary.txt
+          echo "========================================" >> grype-vulnerability-summary.txt
+          echo "SUMMARY BY SEVERITY:" >> grype-vulnerability-summary.txt
+          echo "========================================" >> grype-vulnerability-summary.txt
+          cat grype-results-full.json | jq -r '.matches[]? | .vulnerability.severity' | sort | uniq -c >> grype-vulnerability-summary.txt
+          
+          # Create CSV for easy import
+          echo "Severity,CVE/GHSA,Package,Version,Fixed Version,Description" > grype-vulnerabilities.csv
+          cat grype-results-full.json | jq -r '.matches[]? | [.vulnerability.severity, .vulnerability.id, .artifact.name, .artifact.version, (.vulnerability.fix.versions[0] // "No fix"), (.vulnerability.description // "N/A" | gsub(","; ";"))] | @csv' >> grype-vulnerabilities.csv
 
-      - name: Upload Grype results
+      - name: Display clean summary in logs
+        if: always()
+        run: |
+          echo "=== Clean Vulnerability Summary ==="
+          cat grype-vulnerability-summary.txt
+
+      - name: Upload clean summary report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: grype-scan-results
-          path: grype-results.json
+          name: grype-vulnerability-summary
+          path: grype-vulnerability-summary.txt
+
+      - name: Upload CSV report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-vulnerabilities-csv
+          path: grype-vulnerabilities.csv
+
+      - name: Upload full JSON (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-full-json-report
+          path: grype-results-full.json
 
   dependency-tree:
     runs-on: ubuntu-latest
