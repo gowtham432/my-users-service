@@ -26,7 +26,7 @@ jobs:
           distribution: 'temurin'
  
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@af1da67850ed9a4cedd57bfd976089dd991e2582 # v4.0.0
+        uses: gradle/actions/setup-gradle@af1da67850ed9a4cedd57bfd976089dd991e2582
  
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -49,15 +49,14 @@ jobs:
           distribution: 'temurin'
  
       - name: Generate and submit dependency graph
-        uses: gradle/actions/dependency-submission@af1da67850ed9a4cedd57bfd976089dd991e2582 # v4.0.0
+        uses: gradle/actions/dependency-submission@af1da67850ed9a4cedd57bfd976089dd991e2582
  
   trivy-fs-scan:
-    # Optional: run only after build succeeds
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write   # needed to upload SARIF to Security tab
+      security-events: write
  
     steps:
       - name: Checkout repository
@@ -67,11 +66,11 @@ jobs:
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: 'fs'
-          scan-ref: '.'                 # scan the whole repo
+          scan-ref: '.'
           format: 'sarif'
           output: 'trivy-fs-results.sarif'
-          ignore-unfixed: true          # optional: reduce noise
-          severity: 'CRITICAL,HIGH'     # adjust as you like
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
  
       - name: Upload Trivy fs results as artifact
         if: always()
@@ -85,3 +84,48 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-fs-results.sarif'
+
+  trivy-jar-scan:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+ 
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+ 
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+ 
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+ 
+      - name: Build JAR (skip tests)
+        run: ./gradlew clean build -x test
+ 
+      - name: Run Trivy scan on built JAR
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          scan-ref: 'build/libs'
+          format: 'sarif'
+          output: 'trivy-jar-results.sarif'
+          severity: 'CRITICAL,HIGH'
+ 
+      - name: Upload Trivy jar results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-jar-results
+          path: trivy-jar-results.sarif
+ 
+      - name: Upload Trivy JAR results to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-jar-results.sarif'
