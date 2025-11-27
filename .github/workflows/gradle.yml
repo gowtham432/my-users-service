@@ -1,4 +1,4 @@
-name: Java CI with Gradle and Security Scanning
+name: Java CI with Security Scanning
 
 on:
   push:
@@ -7,13 +7,15 @@ on:
     branches: [ "master" ]
 
 jobs:
-  build:
+  build-and-scan:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      security-events: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -27,252 +29,80 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Verify vulnerable dependencies
-        run: ./gradlew verifyVulnerableDependencies
+      - name: Verify vulnerable dependencies are present
+        run: |
+          echo "=== Verifying vulnerable dependencies ==="
+          ./gradlew verifyVulnerableDependencies
+          echo ""
+          echo "=== Full dependency tree ==="
+          ./gradlew dependencies --configuration runtimeClasspath | grep -E "jackson-databind|mysql-connector" -A 1 -B 1
 
-      - name: Build with Gradle Wrapper
+      - name: Build application
         run: ./gradlew clean bootJar -x test
 
-      - name: List JAR files and contents
+      - name: Run OWASP Dependency-Check via Gradle
         run: |
-          echo "=== Built JAR files ==="
-          ls -lh build/libs/
-          echo ""
-          echo "=== Checking for vulnerable libraries in JAR ==="
-          unzip -l build/libs/*.jar | grep -E "jackson-databind|mysql-connector" || echo "Not found with grep"
-          echo ""
-          echo "=== Listing all JARs in BOOT-INF/lib ==="
-          unzip -l build/libs/*.jar | grep "BOOT-INF/lib/" | grep -E "\.jar$" | head -20
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-libs
-          path: build/libs/*.jar
-
-  dependency-submission:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-
-      - name: Generate and submit dependency graph
-        uses: gradle/actions/dependency-submission@af1da67850ed9a4cedd57bfd976089dd991e2582
-
-  # Use Trivy to scan the JAR file
-  trivy-jar-scan:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-
-      - name: Make gradlew executable
-        run: chmod +x gradlew
-
-      - name: Build JAR
-        run: ./gradlew clean bootJar -x test
-
-      - name: Extract nested JARs from Spring Boot JAR
-        run: |
-          mkdir -p extracted-libs
-          cd build/libs
-          JAR_FILE=$(ls *.jar | head -1)
-          echo "Extracting from: $JAR_FILE"
-          unzip -q "$JAR_FILE" "BOOT-INF/lib/*" -d ../../extracted-libs || true
-          cd ../..
-          echo ""
-          echo "=== Extracted library JARs ==="
-          find extracted-libs -name "*.jar" -type f | sort
-          echo ""
-          echo "=== Looking for vulnerable JARs ==="
-          find extracted-libs -name "*jackson-databind*" -o -name "*mysql-connector*"
-
-      - name: Run Trivy on extracted libraries (verbose)
-        run: |
-          echo "=== Scanning extracted libraries ==="
-          docker run --rm -v $(pwd)/extracted-libs:/scan aquasec/trivy:latest fs --scanners vuln --severity CRITICAL,HIGH,MEDIUM,LOW /scan
-
-      - name: Run Trivy on extracted libraries (table format)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: 'fs'
-          scan-ref: 'extracted-libs'
-          format: 'table'
-          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
-          scanners: 'vuln'
-
-      - name: Run Trivy on extracted libraries (JSON format)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: 'fs'
-          scan-ref: 'extracted-libs'
-          format: 'json'
-          output: 'trivy-results.json'
-          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
-          scanners: 'vuln'
-
-      - name: Run Trivy on extracted libraries (SARIF format)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: 'fs'
-          scan-ref: 'extracted-libs'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-          scanners: 'vuln'
+          echo "=== Running OWASP Dependency-Check ==="
+          echo "This will download the NVD database (may take 2-3 minutes first time)"
+          ./gradlew dependencyCheckAnalyze --info
+        continue-on-error: true
 
       - name: Display vulnerability summary
         if: always()
         run: |
-          if [ -f trivy-results.json ]; then
-            echo "=== Vulnerability Summary ==="
-            cat trivy-results.json | jq -r '.Results[]? | select(.Vulnerabilities != null) | .Target as $target | .Vulnerabilities[] | "\($target) | \(.VulnerabilityID) | \(.Severity) | \(.PkgName)@\(.InstalledVersion)"' || true
+          echo "=========================================="
+          echo "VULNERABILITY SCAN RESULTS"
+          echo "=========================================="
+          if [ -f build/reports/dependency-check-report.json ]; then
+            echo ""
+            echo "=== CRITICAL Vulnerabilities ==="
+            cat build/reports/dependency-check-report.json | jq -r '.dependencies[]? | select(.vulnerabilities != null) | .fileName as $file | .vulnerabilities[] | select(.severity == "CRITICAL") | "🔴 \(.name) - \(.description[:100])..."' || true
+            echo ""
+            echo "=== HIGH Vulnerabilities ==="
+            cat build/reports/dependency-check-report.json | jq -r '.dependencies[]? | select(.vulnerabilities != null) | .fileName as $file | .vulnerabilities[] | select(.severity == "HIGH") | "🟠 \(.name) - \(.description[:100])..."' || true
+            echo ""
+            echo "=== Vulnerability Count by Severity ==="
+            cat build/reports/dependency-check-report.json | jq -r '.dependencies[]? | select(.vulnerabilities != null) | .vulnerabilities[] | .severity' | sort | uniq -c || true
+            echo ""
+            echo "✅ Full reports available in job artifacts"
+          else
+            echo "❌ No report file found at build/reports/dependency-check-report.json"
+            echo "Checking if report exists elsewhere..."
+            find . -name "dependency-check-report.*" -type f
           fi
 
-      - name: Upload JSON results
+      - name: Upload HTML Report (Human Readable)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-results-json
-          path: trivy-results.json
+          name: vulnerability-report-html
+          path: build/reports/dependency-check-report.html
+          if-no-files-found: warn
 
-      - name: Upload SARIF results
+      - name: Upload JSON Report (Machine Readable)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-results-sarif
-          path: trivy-results.sarif
+          name: vulnerability-report-json
+          path: build/reports/dependency-check-report.json
+          if-no-files-found: warn
 
-      - name: Upload to GitHub Security tab
+      - name: Upload SARIF Report (GitHub Security)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulnerability-report-sarif
+          path: build/reports/dependency-check-report.sarif
+          if-no-files-found: warn
+
+      - name: Upload to GitHub Security Tab
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-results.sarif'
+          sarif_file: build/reports/dependency-check-report.sarif
+        continue-on-error: true
 
-  # Alternative: Scan individual JAR files directly
-  trivy-direct-jar-scan:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-
-      - name: Make gradlew executable
-        run: chmod +x gradlew
-
-      - name: Build and extract dependencies
-        run: |
-          ./gradlew clean bootJar -x test
-          mkdir -p scan-target
-          cd build/libs
-          JAR_FILE=$(ls *.jar | head -1)
-          unzip -q "$JAR_FILE" "BOOT-INF/lib/jackson-databind-*.jar" -d ../../scan-target || true
-          unzip -q "$JAR_FILE" "BOOT-INF/lib/mysql-connector-java-*.jar" -d ../../scan-target || true
-          cd ../..
-          echo "=== Files to scan ==="
-          find scan-target -name "*.jar"
-
-      - name: Scan jackson-databind with Trivy
-        if: always()
-        run: |
-          if [ -f scan-target/BOOT-INF/lib/jackson-databind-2.9.8.jar ]; then
-            echo "=== Scanning jackson-databind-2.9.8.jar ==="
-            docker run --rm -v $(pwd)/scan-target:/scan aquasec/trivy:latest fs /scan/BOOT-INF/lib/jackson-databind-2.9.8.jar
-          fi
-
-      - name: Scan mysql-connector with Trivy
-        if: always()
-        run: |
-          if [ -f scan-target/BOOT-INF/lib/mysql-connector-java-5.1.44.jar ]; then
-            echo "=== Scanning mysql-connector-java-5.1.44.jar ==="
-            docker run --rm -v $(pwd)/scan-target:/scan aquasec/trivy:latest fs /scan/BOOT-INF/lib/mysql-connector-java-5.1.44.jar
-          fi
-
-  # Use OWASP Dependency-Check
-  owasp-dependency-check:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-
-      - name: Make gradlew executable
-        run: chmod +x gradlew
-
-      - name: Build project
-        run: ./gradlew clean build -x test
-
-      - name: Install OWASP Dependency-Check
-        run: |
-          VERSION=10.0.4
-          wget -q "https://github.com/jeremylong/DependencyCheck/releases/download/v${VERSION}/dependency-check-${VERSION}-release.zip"
-          unzip -q dependency-check-${VERSION}-release.zip
-
-      - name: Run OWASP Dependency-Check on build output
-        run: |
-          ./dependency-check/bin/dependency-check.sh \
-            --project "my-users-service" \
-            --scan build/libs/ \
-            --format ALL \
-            --out dependency-check-report \
-            --suppression suppression.xml \
-            --failOnCVSS 0
-
-      - name: Display vulnerability findings
-        if: always()
-        run: |
-          if [ -f dependency-check-report/dependency-check-report.json ]; then
-            echo "=== OWASP Dependency-Check Findings ==="
-            cat dependency-check-report/dependency-check-report.json | jq -r '.dependencies[]? | select(.vulnerabilities != null) | .fileName as $file | .vulnerabilities[] | "\($file) | \(.name) | \(.severity) | \(.description[:100])"' || true
-          fi
-
-      - name: Upload OWASP reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: owasp-dependency-check-report
-          path: dependency-check-report/
-
-  # Use Grype scanner
   grype-scan:
-    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -292,33 +122,62 @@ jobs:
 
       - name: Build JAR
         run: ./gradlew clean bootJar -x test
-
-      - name: Extract nested JARs
-        run: |
-          mkdir -p grype-scan
-          cd build/libs
-          JAR_FILE=$(ls *.jar | head -1)
-          unzip -q "$JAR_FILE" "BOOT-INF/lib/*" -d ../../grype-scan
 
       - name: Install Grype
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
 
-      - name: Scan with Grype (table output)
+      - name: Scan with Grype
         run: |
           echo "=== Grype Vulnerability Scan ==="
-          grype dir:grype-scan
-
-      - name: Scan with Grype (JSON output)
-        run: |
-          grype dir:grype-scan -o json > grype-results.json
+          grype dir:build/libs -o table
           echo ""
-          echo "=== Grype Results Summary ==="
-          cat grype-results.json | jq -r '.matches[]? | "\(.vulnerability.id) | \(.vulnerability.severity) | \(.artifact.name)@\(.artifact.version)"' | sort -u
+          echo "=== Saving JSON report ==="
+          grype dir:build/libs -o json > grype-results.json
+
+      - name: Display Grype summary
+        if: always()
+        run: |
+          echo "=== Grype Findings Summary ==="
+          cat grype-results.json | jq -r '.matches[]? | "\(.vulnerability.severity) | \(.vulnerability.id) | \(.artifact.name)@\(.artifact.version)"' | sort -r | head -20
 
       - name: Upload Grype results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: grype-results
+          name: grype-scan-results
           path: grype-results.json
+
+  dependency-tree:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Generate dependency tree report
+        run: |
+          echo "=== Runtime Dependency Tree ==="
+          ./gradlew dependencies --configuration runtimeClasspath > dependency-tree.txt
+          cat dependency-tree.txt
+          echo ""
+          echo "=== Vulnerable Dependencies Found ==="
+          grep -E "jackson-databind.*2.9.8|mysql-connector-java.*5.1.44" dependency-tree.txt || echo "⚠️  Vulnerable versions not found in tree!"
+
+      - name: Upload dependency tree
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-tree
+          path: dependency-tree.txt
