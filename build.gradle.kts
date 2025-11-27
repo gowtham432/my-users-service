@@ -1,6 +1,6 @@
 plugins {
 	java
-	id("org.springframework.boot") version "2.6.0"
+	id("org.springframework.boot") version "3.2.2"
 	id("io.spring.dependency-management") version "1.1.4"
 }
 
@@ -22,6 +22,8 @@ dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-security")
 	implementation("org.springframework.boot:spring-boot-starter-validation")
 	implementation("org.springframework.boot:spring-boot-starter-web")
+	implementation("com.fasterxml.jackson.core:jackson-databind:2.14.0")
+	runtimeOnly("mysql:mysql-connector-java:8.0.13")
     implementation("org.jetbrains:annotations:24.0.0")
     compileOnly("org.projectlombok:lombok")
 	annotationProcessor("org.projectlombok:lombok")
