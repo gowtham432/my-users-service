@@ -194,13 +194,17 @@ jobs:
           echo ""
           echo "=== Saving full JSON report ==="
           grype dir:build/libs -o json > grype-results-full.json
+          echo ""
+          echo "=== Creating simple CVE list ==="
+          grype dir:build/libs -o template -t '{{range .Matches}}{{if .Vulnerability.ID | hasPrefix "CVE"}}{{.Vulnerability.ID}} | {{.Vulnerability.Severity}} | {{.Artifact.Name}}@{{.Artifact.Version}}
+{{end}}{{end}}' > grype-cve-only.txt || true
 
       - name: Create clean vulnerability summary
         if: always()
         run: |
           echo "=== Creating Clean Vulnerability Report ==="
           
-          # Create summary report with only vulnerabilities
+          # Create summary report with only vulnerabilities (prefer CVE over GHSA)
           cat > grype-vulnerability-summary.txt << 'EOF'
           ========================================
           GRYPE VULNERABILITY SCAN REPORT
@@ -213,22 +217,46 @@ jobs:
           echo "" >> grype-vulnerability-summary.txt
           echo "CRITICAL VULNERABILITIES:" >> grype-vulnerability-summary.txt
           echo "=========================" >> grype-vulnerability-summary.txt
-          cat grype-results-full.json | jq -r '.matches[]? | select(.vulnerability.severity == "Critical") | "• \(.vulnerability.id) - \(.artifact.name)@\(.artifact.version)\n  Description: \(.vulnerability.description // "N/A")\n  Fixed in: \(.vulnerability.fix.versions[0] // "No fix available")\n"' >> grype-vulnerability-summary.txt || echo "None found" >> grype-vulnerability-summary.txt
+          cat grype-results-full.json | jq -r '.matches[]? | select(.vulnerability.severity == "Critical") | 
+            (if (.relatedVulnerabilities | length > 0) then 
+              (.relatedVulnerabilities[] | select(.id | startswith("CVE")) | .id) // .vulnerability.id 
+            else 
+              .vulnerability.id 
+            end) as $cve_id | 
+            "• \($cve_id) - \(.artifact.name)@\(.artifact.version)\n  Description: \(.vulnerability.description // "N/A")\n  Fixed in: \(.vulnerability.fix.versions[0] // "No fix available")\n"' >> grype-vulnerability-summary.txt || echo "None found" >> grype-vulnerability-summary.txt
           
           echo "" >> grype-vulnerability-summary.txt
           echo "HIGH VULNERABILITIES:" >> grype-vulnerability-summary.txt
           echo "=====================" >> grype-vulnerability-summary.txt
-          cat grype-results-full.json | jq -r '.matches[]? | select(.vulnerability.severity == "High") | "• \(.vulnerability.id) - \(.artifact.name)@\(.artifact.version)\n  Description: \(.vulnerability.description // "N/A")\n  Fixed in: \(.vulnerability.fix.versions[0] // "No fix available")\n"' >> grype-vulnerability-summary.txt || echo "None found" >> grype-vulnerability-summary.txt
+          cat grype-results-full.json | jq -r '.matches[]? | select(.vulnerability.severity == "High") | 
+            (if (.relatedVulnerabilities | length > 0) then 
+              (.relatedVulnerabilities[] | select(.id | startswith("CVE")) | .id) // .vulnerability.id 
+            else 
+              .vulnerability.id 
+            end) as $cve_id | 
+            "• \($cve_id) - \(.artifact.name)@\(.artifact.version)\n  Description: \(.vulnerability.description // "N/A")\n  Fixed in: \(.vulnerability.fix.versions[0] // "No fix available")\n"' >> grype-vulnerability-summary.txt || echo "None found" >> grype-vulnerability-summary.txt
           
           echo "" >> grype-vulnerability-summary.txt
           echo "MEDIUM VULNERABILITIES:" >> grype-vulnerability-summary.txt
           echo "=======================" >> grype-vulnerability-summary.txt
-          cat grype-results-full.json | jq -r '.matches[]? | select(.vulnerability.severity == "Medium") | "• \(.vulnerability.id) - \(.artifact.name)@\(.artifact.version)"' >> grype-vulnerability-summary.txt || echo "None found" >> grype-vulnerability-summary.txt
+          cat grype-results-full.json | jq -r '.matches[]? | select(.vulnerability.severity == "Medium") | 
+            (if (.relatedVulnerabilities | length > 0) then 
+              (.relatedVulnerabilities[] | select(.id | startswith("CVE")) | .id) // .vulnerability.id 
+            else 
+              .vulnerability.id 
+            end) as $cve_id | 
+            "• \($cve_id) - \(.artifact.name)@\(.artifact.version)"' >> grype-vulnerability-summary.txt || echo "None found" >> grype-vulnerability-summary.txt
           
           echo "" >> grype-vulnerability-summary.txt
           echo "LOW VULNERABILITIES:" >> grype-vulnerability-summary.txt
           echo "====================" >> grype-vulnerability-summary.txt
-          cat grype-results-full.json | jq -r '.matches[]? | select(.vulnerability.severity == "Low") | "• \(.vulnerability.id) - \(.artifact.name)@\(.artifact.version)"' >> grype-vulnerability-summary.txt || echo "None found" >> grype-vulnerability-summary.txt
+          cat grype-results-full.json | jq -r '.matches[]? | select(.vulnerability.severity == "Low") | 
+            (if (.relatedVulnerabilities | length > 0) then 
+              (.relatedVulnerabilities[] | select(.id | startswith("CVE")) | .id) // .vulnerability.id 
+            else 
+              .vulnerability.id 
+            end) as $cve_id | 
+            "• \($cve_id) - \(.artifact.name)@\(.artifact.version)"' >> grype-vulnerability-summary.txt || echo "None found" >> grype-vulnerability-summary.txt
           
           echo "" >> grype-vulnerability-summary.txt
           echo "========================================" >> grype-vulnerability-summary.txt
@@ -236,15 +264,31 @@ jobs:
           echo "========================================" >> grype-vulnerability-summary.txt
           cat grype-results-full.json | jq -r '.matches[]? | .vulnerability.severity' | sort | uniq -c >> grype-vulnerability-summary.txt
           
-          # Create CSV for easy import
-          echo "Severity,CVE/GHSA,Package,Version,Fixed Version,Description" > grype-vulnerabilities.csv
-          cat grype-results-full.json | jq -r '.matches[]? | [.vulnerability.severity, .vulnerability.id, .artifact.name, .artifact.version, (.vulnerability.fix.versions[0] // "No fix"), (.vulnerability.description // "N/A" | gsub(","; ";"))] | @csv' >> grype-vulnerabilities.csv
+          # Create CSV for easy import (prefer CVE over GHSA)
+          echo "Severity,CVE,GHSA,Package,Version,Fixed Version,Description" > grype-vulnerabilities.csv
+          cat grype-results-full.json | jq -r '.matches[]? | 
+            (if (.relatedVulnerabilities | length > 0) then 
+              ([.relatedVulnerabilities[] | select(.id | startswith("CVE")) | .id] | join("; ")) 
+            else 
+              "" 
+            end) as $cve_ids |
+            (.vulnerability.id | if (. | startswith("GHSA")) then . else "" end) as $ghsa_id |
+            (if ($cve_ids == "") then .vulnerability.id else $cve_ids end) as $primary_id |
+            [.vulnerability.severity, $cve_ids, $ghsa_id, .artifact.name, .artifact.version, (.vulnerability.fix.versions[0] // "No fix"), (.vulnerability.description // "N/A" | gsub(","; ";") | gsub("\n"; " "))] | @csv' >> grype-vulnerabilities.csv
 
       - name: Display clean summary in logs
         if: always()
         run: |
-          echo "=== Clean Vulnerability Summary ==="
+          echo "=== Clean Vulnerability Summary (CVE Format) ==="
           cat grype-vulnerability-summary.txt
+          echo ""
+          echo "=== CVE to GHSA Mapping ==="
+          cat grype-results-full.json | jq -r '.matches[]? | 
+            select(.relatedVulnerabilities | length > 0) | 
+            .vulnerability.id as $ghsa | 
+            .relatedVulnerabilities[] | 
+            select(.id | startswith("CVE")) | 
+            "\(.id) → \($ghsa)"' | sort -u || echo "No mappings found"
 
       - name: Upload clean summary report
         if: always()
@@ -252,6 +296,13 @@ jobs:
         with:
           name: grype-vulnerability-summary
           path: grype-vulnerability-summary.txt
+
+      - name: Upload CVE-only list
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-cve-only-list
+          path: grype-cve-only.txt
 
       - name: Upload CSV report
         if: always()
