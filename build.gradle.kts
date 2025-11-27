@@ -18,8 +18,8 @@ repositories {
 // CRITICAL: Force vulnerable versions to override Spring Boot's dependency management
 configurations.all {
     resolutionStrategy {
-        force("com.fasterxml.jackson.core:jackson-databind:2.9.8")
-        force("com.fasterxml.jackson.core:jackson-core:2.9.8")
+        force("com.fasterxml.jackson.core:jackson-databind:2.12.7.1")
+        force("com.fasterxml.jackson.core:jackson-core:2.12.7.1")
         force("com.fasterxml.jackson.core:jackson-annotations:2.9.0")
         force("mysql:mysql-connector-java:5.1.44")
         
@@ -49,8 +49,8 @@ dependencies {
     }
     
     // Explicitly add vulnerable versions
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.9.8")
-    implementation("com.fasterxml.jackson.core:jackson-core:2.9.8")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.12.7.1")
+    implementation("com.fasterxml.jackson.core:jackson-core:2.12.7.1")
     implementation("com.fasterxml.jackson.core:jackson-annotations:2.9.0")
     
     // Vulnerable MySQL connector
@@ -77,7 +77,7 @@ tasks.register("verifyVulnerableDependencies") {
                 it.moduleVersion.id.name == "jackson-databind") {
                 println("✓ jackson-databind version: ${it.moduleVersion.id.version}")
                 if (it.moduleVersion.id.version != "2.9.8") {
-                    throw GradleException("ERROR: jackson-databind should be 2.9.8 but is ${it.moduleVersion.id.version}")
+                    throw GradleException("ERROR: jackson-databind should be 2.12.7.1 but is ${it.moduleVersion.id.version}")
                 }
             }
             if (it.moduleVersion.id.group == "mysql" && 
