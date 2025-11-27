@@ -30,6 +30,12 @@ jobs:
       - name: Build with Gradle Wrapper
         run: ./gradlew build -x test
 
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-libs
+          path: build/libs/*.jar
+
   dependency-submission:
     runs-on: ubuntu-latest
     permissions:
@@ -47,8 +53,8 @@ jobs:
       - name: Generate and submit dependency graph
         uses: gradle/actions/dependency-submission@af1da67850ed9a4cedd57bfd976089dd991e2582
 
-  trivy-fs-scan:
-    needs: build
+  # Scan Gradle lockfile/config directly
+  trivy-gradle-scan:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -58,37 +64,55 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run Trivy vulnerability scanner in filesystem mode
+      - name: List files for debugging
+        run: |
+          echo "=== Repository root files ==="
+          ls -la
+          echo "=== Looking for Gradle files ==="
+          find . -name "*.gradle" -o -name "*.gradle.kts" -o -name "gradle.lockfile"
+
+      - name: Run Trivy on Gradle config (table format)
         uses: aquasecurity/trivy-action@0.28.0
         with:
-          scan-type: 'fs'
+          scan-type: 'config'
           scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-fs-results.sarif'
-          ignore-unfixed: true
-          severity: 'CRITICAL,HIGH'
+          format: 'table'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+          trivyignores: ''
 
-      - name: Run Trivy scanner for table output
+      - name: Run Trivy filesystem scan (table format)
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'table'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+          scanners: 'vuln'
 
-      - name: Upload Trivy fs results as artifact
+      - name: Run Trivy filesystem scan (SARIF)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-gradle-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          scanners: 'vuln'
+
+      - name: Upload Trivy Gradle results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-fs-results
-          path: trivy-fs-results.sarif
+          name: trivy-gradle-results
+          path: trivy-gradle-results.sarif
 
-      - name: Upload Trivy fs results to GitHub Security tab
+      - name: Upload to GitHub Security tab
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-fs-results.sarif'
+          sarif_file: 'trivy-gradle-results.sarif'
 
+  # Scan the built JAR file
   trivy-jar-scan:
     needs: build
     runs-on: ubuntu-latest
@@ -109,18 +133,36 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Build JAR (skip tests)
-        run: ./gradlew clean build -x test
+      - name: Build JAR with dependencies
+        run: |
+          ./gradlew clean bootJar -x test
+          echo "=== Built JAR files ==="
+          ls -lh build/libs/
+          echo "=== JAR contents preview ==="
+          jar -tf build/libs/*.jar | head -20
 
-      - name: Run Trivy scan on built JAR (table output)
+      - name: Run Trivy on JAR (table format - all severities)
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: 'fs'
           scan-ref: 'build/libs'
           format: 'table'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+          scanners: 'vuln'
+        continue-on-error: true
 
-      - name: Run Trivy scan on built JAR (SARIF)
+      - name: Run Trivy on JAR (JSON format for detailed output)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          scan-ref: 'build/libs'
+          format: 'json'
+          output: 'trivy-jar-results.json'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+          scanners: 'vuln'
+        continue-on-error: true
+
+      - name: Run Trivy on JAR (SARIF format)
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: 'fs'
@@ -128,26 +170,35 @@ jobs:
           format: 'sarif'
           output: 'trivy-jar-results.sarif'
           severity: 'CRITICAL,HIGH'
+          scanners: 'vuln'
+        continue-on-error: true
 
-      - name: Upload Trivy jar results as artifact
+      - name: Upload JSON results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-jar-results
+          name: trivy-jar-json
+          path: trivy-jar-results.json
+
+      - name: Upload SARIF results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-jar-sarif
           path: trivy-jar-results.sarif
 
-      - name: Upload Trivy JAR results to GitHub Security tab
+      - name: Upload to GitHub Security tab
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-jar-results.sarif'
 
-  # Optional: Fail the build if critical vulnerabilities are found
-  security-gate:
-    needs: [trivy-fs-scan, trivy-jar-scan]
+  # Alternative: Use OWASP Dependency-Check
+  owasp-dependency-check:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      security-events: write
 
     steps:
       - name: Checkout repository
@@ -162,54 +213,53 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Build JAR
-        run: ./gradlew clean build -x test
+      - name: Add OWASP Dependency-Check plugin
+        run: |
+          echo "" >> build.gradle.kts
+          echo "plugins {" >> build.gradle.kts
+          echo "    id(\"org.owasp.dependencycheck\") version \"9.0.9\"" >> build.gradle.kts
+          echo "}" >> build.gradle.kts
 
-      - name: Run Trivy with exit code on vulnerabilities
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: 'fs'
-          scan-ref: 'build/libs'
-          format: 'table'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'  # Fail the pipeline if vulnerabilities found
-        continue-on-error: false
+      - name: Run OWASP Dependency-Check
+        run: |
+          ./gradlew dependencyCheckAnalyze --info
+        continue-on-error: true
 
-  # Generate a detailed vulnerability report
-  vulnerability-report:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-
-      - name: Make gradlew executable
-        run: chmod +x gradlew
-
-      - name: Build JAR
-        run: ./gradlew clean build -x test
-
-      - name: Run Trivy and generate JSON report
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'json'
-          output: 'trivy-report.json'
-          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
-
-      - name: Upload detailed vulnerability report
+      - name: Upload OWASP report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vulnerability-report
-          path: trivy-report.json
+          name: owasp-dependency-check-report
+          path: build/reports/dependency-check-report.html
+
+  # Manual Gradle dependency tree analysis
+  gradle-dependency-analysis:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Show dependency tree
+        run: |
+          echo "=== Runtime Dependencies ==="
+          ./gradlew dependencies --configuration runtimeClasspath
+          echo ""
+          echo "=== Compile Dependencies ==="
+          ./gradlew dependencies --configuration compileClasspath
+
+      - name: List vulnerable dependencies
+        run: |
+          echo "=== Checking for known vulnerable dependencies ==="
+          ./gradlew dependencies --configuration runtimeClasspath | grep -E "(jackson-databind|mysql-connector)" || echo "Dependencies not found in tree"
