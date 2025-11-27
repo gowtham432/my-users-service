@@ -2,6 +2,7 @@ plugins {
     java
     id("org.springframework.boot") version "3.2.2"
     id("io.spring.dependency-management") version "1.1.4"
+    id("org.owasp.dependencycheck") version "10.0.4"
 }
 
 group = "com.myapp"
@@ -69,6 +70,15 @@ tasks.withType<Test> {
 }
 
 // Task to verify vulnerable dependencies are actually being used
+// Add OWASP Dependency-Check plugin
+plugins.apply("org.owasp.dependencycheck")
+
+configure<org.owasp.dependencycheck.gradle.extension.DependencyCheckExtension> {
+    formats = listOf("HTML", "JSON", "SARIF")
+    failBuildOnCVSS = 0f  // Report all vulnerabilities but don't fail build
+    suppressionFile = file("suppression.xml").absolutePath
+}
+
 tasks.register("verifyVulnerableDependencies") {
     doLast {
         println("=== Verifying Vulnerable Dependencies ===")
